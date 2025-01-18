@@ -36,10 +36,10 @@ CPU::CPU(const char *processor, Memory *memory, uint32_t frequency) {
   gptimer = NULL;
   gptimer_config_t timer_config = {
       .clk_src = GPTIMER_CLK_SRC_DEFAULT,
-      .direction = GPTIMER_COUNT_UP,
-      .resolution_hz = 1000000,  // 1MHz, 1 tick=1us
-      .intr_priority = 0,
-      .flags = {.intr_shared = true, .allow_pd = 0, .backup_before_sleep = 0}};
+      .direction = GPTIMER_COUNT_DOWN,
+      .resolution_hz = frequency,  // 1MHz, 1 tick=1us
+      .intr_priority = 1,
+      .flags = {.intr_shared = false, .allow_pd = 0, .backup_before_sleep = 0}};
   ESP_ERROR_CHECK(gptimer_new_timer(&timer_config, &gptimer));
 
   gptimer_event_callbacks_t cbs = {

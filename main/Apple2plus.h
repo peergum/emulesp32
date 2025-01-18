@@ -20,6 +20,8 @@ extern "C" {
 class Apple2plus: public CPU6502 {
 public:
     Apple2plus(Memory *memory);
+    bool isRunning();
+    uint8_t *text1();
 };
 
 #endif

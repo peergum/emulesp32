@@ -35,6 +35,7 @@ class CPU {
 
   void boot() {
     reset();
+    running = true;
     emulate();
   }
 
@@ -45,6 +46,7 @@ class CPU {
     } else {
       printf("Powering off.\n");
       halt();
+      running = false;
     }
   }
 
@@ -53,7 +55,7 @@ class CPU {
  protected:
   char *processor;
   Memory *memory;
-  bool run = false;
+  bool running = false;
   uint32_t frequency;
   QueueHandle_t sTimerQueue;
   queue_element_t sQueueElement;

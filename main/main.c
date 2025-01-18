@@ -7,10 +7,11 @@
 
 static const char *TAG = "Main";
 
-int app_main(void)
-{
-    ESP_LOGD(TAG,"Starting");
-    initEmulation();
-    return 0;
+int app_main(void) {
+  esp_log_level_set("6502", ESP_LOG_INFO);
+  ESP_LOGD(TAG, "Starting");
+  initEmulation();
+  while (true) {
+    vTaskDelay(1000);
+  }
 }
-
