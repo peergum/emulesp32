@@ -4,14 +4,17 @@
 
 #include "Apple2plus.h"
 #include "main.h"
+#include "display.h"
 
 static const char *TAG = "Main";
 
 int app_main(void) {
-  esp_log_level_set("6502", ESP_LOG_INFO);
+  esp_log_level_set("*", ESP_LOG_INFO);
   ESP_LOGD(TAG, "Starting");
+
+  initLCD();
   initEmulation();
   while (true) {
-    vTaskDelay(1000);
+    vTaskDelay(100);
   }
 }

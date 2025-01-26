@@ -6,6 +6,8 @@
 #include <cstring>
 #include <cstdio>
 
+#include "display.h"
+
 const int NUM_BLOCKS = 2;
 
 static Block ram = {0x0000, 0xc000, RW};
@@ -32,16 +34,20 @@ void emulate(void *pvParameters) {
 }
 
 void video(void *pvParameters) {
-  char line[80], temp[10];
-  for (;;) {
-    line[0] = 0;
-    for (int i = 0; i < 0x10; i++) {
-      sprintf(temp, "%02x ", *(apple2->text1() + i));
-      strcat(line, temp);
+  int cnt = 0;
+  bool on = false;
+  uint8_t ch = 0;
+  for (;; ch++) {
+    // for (int i = 0; i < 0x400; i++ ){
+    //   *(apple2->text1() + i) = ch;
+    // }
+    drawText(apple2->text1(), 40, 24, on);
+    vTaskDelay(10);
+    cnt++;
+    if (cnt%10 == 0) {
+      on = !on;
+      // ESP_LOGI(TAG, "on=%d", on);
     }
-    strcat(line,"\n");
-    ESP_LOGI(TAG, "%s", line);
-    vTaskDelay(1000);
   }
   vTaskDelete(xEmulationHandle);
 }
@@ -55,9 +61,9 @@ void initEmulation() {
               &xVideoHandle);
   configASSERT(xVideoHandle);
 
-  for (;;) {
-    vTaskDelay(1000);
-  }
+  // for (;;) {
+  //   vTaskDelay(1000);
+  // }
   // Use the handle to delete the task.
   // if (xEmulationHandle != NULL) {
   //   vTaskDelete(xEmulationHandle);
@@ -75,4 +81,4 @@ Apple2plus::Apple2plus(Memory *memory) : CPU6502(memory, 5000000) {
 
 bool Apple2plus::isRunning() { return running; }
 
-uint8_t *Apple2plus::text1() { return memory->mem + 400; }
+uint8_t *Apple2plus::text1() { return memory->mem + 0x400; }

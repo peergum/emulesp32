@@ -35,3 +35,4 @@
 build/**
 .idea/**
 .vscode/**
+managed_components/**

@@ -6,8 +6,15 @@
 #include <cstdio>
 #include <cstring>
 
-#define gen_arg(arg, fmt, ...) \
-  {}
+static bool debug = false;
+
+#define gen_arg(arg, fmt, ...)                 \
+  {                                            \
+    if (debug) sprintf(arg, fmt, __VA_ARGS__); \
+  }
+
+#define log_inst(fmt, ...) \
+  { if (debug) ESP_LOGI(TAG, fmt, __VA_ARGS__); }
 
 enum {
   N = 1 << 7,
@@ -37,7 +44,7 @@ void CPU6502::emulate() {
 
   gptimer_alarm_config_t alarm_config = {
       1,  // alarm count: period = 1µs
-      0,     // reload_count
+      0,  // reload_count
       true,
   };
 
@@ -45,19 +52,23 @@ void CPU6502::emulate() {
   ESP_ERROR_CHECK(gptimer_start(gptimer));
   int counter = 100000000;
   uint16_t spc = 0;
-  uint8_t val, srC;
-  uint16_t ind;
+  uint8_t val, srC, sav;
+  uint16_t ind, ind2;
 
   int cnt = 0;
   while (running) {
     // xQueueReceive(sTimerQueue, &sQueueElement, pdMS_TO_TICKS(1));
     // vTaskDelay(0);
     cnt++;
-    if (cnt % 100000 == 0) {
-      ESP_LOGI(TAG, "cnt=%d", cnt);
+    if (cnt % 15000 == 0) {
+      vTaskDelay(1);
+      // ESP_LOGI(TAG, "cnt=%d", cnt);
       // vTaskDelay(0);
     }
+    // continue;
     // ESP_LOGI(TAG, "Timer reloaded, count=%llu", sQueueElement.microtime);
+
+    // if (pc == 0xd43c) debug = true;
 
     spc = pc;
     cmd = "???";
@@ -74,10 +85,15 @@ void CPU6502::emulate() {
         branch("BPL", N, false);
         break;
       case 0x20:  // JSR abs
-        pushWord(pc + 2);
-        pc = nextWord();
+        ind = nextWord();
         cmd = "JSR";
-        gen_arg(arg, "$%04X", pc);
+        if (ind != 0xfca8) {
+          pushWord(pc);
+          pc = ind;
+          gen_arg(arg, "$%04X", pc);
+        } else {
+          gen_arg(arg, "[$%04X]", pc);
+        }
         break;
       case 0x30:  // BMI
         branch("BMI", N, true);
@@ -91,6 +107,7 @@ void CPU6502::emulate() {
       case 0x60:  // RTS impl
         pc = pullWord();
         cmd = "RTS";
+        gen_arg(arg, "[%04X]", pc);
         break;
       case 0x70:  // BVS
         branch("BVS", V, true);
@@ -112,8 +129,7 @@ void CPU6502::emulate() {
         cmd = "CPY";
         val = nextByte();
         gen_arg(arg, "#$%02X", val);
-        bit(N, y < val);
-        bit(Z, y == val);
+        cmp(y, val);
         break;
       case 0xD0:  // BNE
         branch("BNE", Z, false);
@@ -122,8 +138,7 @@ void CPU6502::emulate() {
         cmd = "CPX";
         val = nextByte();
         gen_arg(arg, "#$%02X", val);
-        bit(N, x < val);
-        bit(Z, x == val);
+        cmp(y, val);
         break;
       case 0xF0:  // BEQ
         branch("BEQ", Z, true);
@@ -135,7 +150,7 @@ void CPU6502::emulate() {
         ind = nextByte();
         val = getByte(getWord(ind + x));
         a |= val;
-        gen_arg(arg, "($%02X, X)", ind);
+        gen_arg(arg, "($%02X, X) [%02X]", ind, val);
         bit(N, a & 0x80);
         bit(Z, a == 0);
         break;
@@ -144,7 +159,7 @@ void CPU6502::emulate() {
         ind = nextByte();
         val = getByte(getWord(ind) + y);
         a |= val;
-        gen_arg(arg, "($%02X), Y", ind);
+        gen_arg(arg, "($%02X), Y [%02X]", ind, val);
         bit(N, a & 0x80);
         bit(Z, a == 0);
         break;
@@ -153,7 +168,7 @@ void CPU6502::emulate() {
         ind = nextByte();
         val = getByte(getWord(ind + x));
         a &= val;
-        gen_arg(arg, "($%02X, X)", ind);
+        gen_arg(arg, "($%02X, X) [%02X]", ind, val);
         bit(N, a & 0x80);
         bit(Z, a == 0);
         break;
@@ -162,7 +177,7 @@ void CPU6502::emulate() {
         ind = nextByte();
         val = getByte(getWord(ind) + y);
         a &= val;
-        gen_arg(arg, "($%02X), Y", ind);
+        gen_arg(arg, "($%02X), Y [%02X]", ind, val);
         bit(N, a & 0x80);
         bit(Z, a == 0);
         break;
@@ -171,7 +186,7 @@ void CPU6502::emulate() {
         ind = nextByte();
         val = getByte(getWord(ind + x));
         a ^= val;
-        gen_arg(arg, "($%02X, X)", ind);
+        gen_arg(arg, "($%02X, X) [%02X]", ind, val);
         bit(N, a & 0x80);
         bit(Z, a == 0);
         break;
@@ -180,7 +195,7 @@ void CPU6502::emulate() {
         ind = nextByte();
         val = getByte(getWord(ind) + y);
         a ^= val;
-        gen_arg(arg, "($%02X), Y", ind);
+        gen_arg(arg, "($%02X), Y [%02X]", ind, val);
         bit(N, a & 0x80);
         bit(Z, a == 0);
         break;
@@ -188,32 +203,34 @@ void CPU6502::emulate() {
         cmd = "ADC";
         ind = nextByte();
         val = getByte(getWord(ind + x));
-        gen_arg(arg, "($%02X, X)", ind);
+        gen_arg(arg, "($%02X, X) [%02X]", ind, val);
         adc(val);
         break;
       case 0x71:  // ADC ind,Y
         cmd = "ADC";
         ind = nextByte();
         val = getByte(getWord(ind) + y);
-        gen_arg(arg, "($%02X), Y", ind);
+        gen_arg(arg, "($%02X), Y [%02X]", ind, val);
         adc(val);
         break;
       case 0x81:  // STA X,ind
         cmd = "STA";
         ind = nextByte();
-        setByte(getWord(ind + x), a);
-        gen_arg(arg, "($%02X, X)", ind);
+        ind2 = getWord(ind + x);
+        setByte(ind2, a);
+        gen_arg(arg, "($%02X, X) [%04X]", ind, ind2);
         break;
       case 0x91:  // STA ind,Y
         cmd = "STA";
         ind = nextByte();
-        setByte(getWord(ind) + y, a);
-        gen_arg(arg, "($%02X), Y", ind);
+        ind2 = getWord(ind) + y;
+        setByte(ind2, a);
+        gen_arg(arg, "($%02X), Y [%04X]", ind, ind2);
         break;
       case 0xA1:  // LDA X,ind
         cmd = "LDA";
         ind = nextByte();
-        val = getByte(ind + x);
+        val = getByte(getWord(ind + x));
         a = val;
         gen_arg(arg, "($%02X, X)", ind);
         bit(N, a & 0x80);
@@ -222,7 +239,7 @@ void CPU6502::emulate() {
       case 0xB1:  // LDA ind,Y
         cmd = "LDA";
         ind = nextByte();
-        val = getByte(ind) + y;
+        val = getByte(getWord(ind) + y);
         a = val;
         gen_arg(arg, "($%02X), Y", ind);
         bit(N, a & 0x80);
@@ -231,31 +248,29 @@ void CPU6502::emulate() {
       case 0xC1:  // CMP X,ind
         cmd = "CMP";
         ind = nextByte();
-        val = getByte(ind + x);
-        gen_arg(arg, "($%02X, X)", ind);
-        bit(N, a < val);
-        bit(Z, a == val);
+        val = getByte(getWord(ind + x));
+        gen_arg(arg, "($%02X, X) [%02X]", ind, val);
+        cmp(a, val);
         break;
       case 0xD1:  // CMP ind,Y
         cmd = "CMP";
         ind = nextByte();
-        val = getByte(ind) + y;
-        gen_arg(arg, "($%02X), Y", ind);
-        bit(N, a < val);
-        bit(Z, a == val);
+        val = getByte(getWord(ind) + y);
+        gen_arg(arg, "($%02X), Y [%02X]", ind, val);
+        cmp(a, val);
         break;
       case 0xE1:  // SBC X,ind
         cmd = "SBC";
         ind = nextByte();
-        val = getByte(ind + x);
-        gen_arg(arg, "($%02X, X)", ind);
+        val = getByte(getWord(ind + x));
+        gen_arg(arg, "($%02X, X) [%02X]", ind, val);
         sbc(val);
         break;
       case 0xF1:  // SBC ind,Y
         cmd = "SBC";
         ind = nextByte();
-        val = getByte(ind) + y;
-        gen_arg(arg, "($%02X), Y", ind);
+        val = getByte(getWord(ind) + y);
+        gen_arg(arg, "($%02X), Y [%02X]", ind, val);
         sbc(val);
         break;
 
@@ -277,7 +292,7 @@ void CPU6502::emulate() {
         cmd = "BIT";
         ind = nextByte();
         val = getByte(ind);
-        gen_arg(arg, "$%02X", ind);
+        gen_arg(arg, "$%02X [%02X]", ind, val);
         bit(N, val & N);
         bit(V, val & V);
         bit(Z, (a & val) == 0);
@@ -319,18 +334,16 @@ void CPU6502::emulate() {
         cmd = "CPY";
         ind = nextByte();
         val = getByte(ind);
-        gen_arg(arg, "$%02X", ind);
-        bit(N, y < val);
-        bit(Z, y == val);
+        gen_arg(arg, "$%02X [%02X]", ind, val);
+        cmp(y, val);
         break;
 
       case 0xE4:  // CPX zpg
         cmd = "CPX";
         ind = nextByte();
         val = getByte(ind);
-        gen_arg(arg, "$%02X", ind);
-        bit(N, x < val);
-        bit(Z, x == val);
+        gen_arg(arg, "$%02X [%02X]", ind, val);
+        cmp(y, val);
         break;
 
         // -5
@@ -340,7 +353,7 @@ void CPU6502::emulate() {
         ind = nextByte();
         val = getByte(ind);
         a |= val;
-        gen_arg(arg, "$%02X", ind);
+        gen_arg(arg, "$%02X [%02X]", ind, val);
         bit(N, a & 0x80);
         bit(Z, a == 0);
         break;
@@ -349,7 +362,7 @@ void CPU6502::emulate() {
         ind = nextByte();
         val = getByte(ind + x);
         a |= val;
-        gen_arg(arg, "$%02X, X", ind);
+        gen_arg(arg, "$%02X, X [%02X]", ind, val);
         bit(N, a & 0x80);
         bit(Z, a == 0);
         break;
@@ -358,7 +371,7 @@ void CPU6502::emulate() {
         ind = nextByte();
         val = getByte(ind);
         a &= val;
-        gen_arg(arg, "$%02X", ind);
+        gen_arg(arg, "$%02X [%02X]", ind, val);
         bit(N, a & 0x80);
         bit(Z, a == 0);
         break;
@@ -367,7 +380,7 @@ void CPU6502::emulate() {
         ind = nextByte();
         val = getByte(ind + x);
         a &= val;
-        gen_arg(arg, "$%02X, X", ind);
+        gen_arg(arg, "$%02X, X [%02X]", ind, val);
         bit(N, a & 0x80);
         bit(Z, a == 0);
         break;
@@ -376,7 +389,7 @@ void CPU6502::emulate() {
         ind = nextByte();
         val = getByte(ind);
         a ^= val;
-        gen_arg(arg, "$%02X", ind);
+        gen_arg(arg, "$%02X [%02X]", ind, val);
         bit(N, a & 0x80);
         bit(Z, a == 0);
         break;
@@ -385,7 +398,7 @@ void CPU6502::emulate() {
         ind = nextByte();
         val = getByte(ind + x);
         a ^= val;
-        gen_arg(arg, "$%02X, X", ind);
+        gen_arg(arg, "$%02X, X [%02X]", ind, val);
         bit(N, a & 0x80);
         bit(Z, a == 0);
         break;
@@ -393,14 +406,14 @@ void CPU6502::emulate() {
         cmd = "ADC";
         ind = nextByte();
         val = getByte(ind);
-        gen_arg(arg, "$%02X", ind);
+        gen_arg(arg, "$%02X [%02X]", ind, val);
         adc(val);
         break;
       case 0x75:  // ADC zpg,X
         cmd = "ADC";
         ind = nextByte();
         val = getByte(ind + x);
-        gen_arg(arg, "$%02X, X", ind);
+        gen_arg(arg, "$%02X, X [%02X]", ind, val);
         adc(val);
         break;
       case 0x85:  // STA zpg
@@ -412,8 +425,9 @@ void CPU6502::emulate() {
       case 0x95:  // STA zpg,X
         cmd = "STA";
         ind = nextByte();
-        setByte(ind + x, a);
-        gen_arg(arg, "$%02X, X", ind);
+        ind2 = ind + x;
+        setByte(ind2, a);
+        gen_arg(arg, "$%02X, X [%04X]", ind, ind2);
         break;
       case 0xA5:  // LDA zpg
         cmd = "LDA";
@@ -437,30 +451,28 @@ void CPU6502::emulate() {
         cmd = "CMP";
         ind = nextByte();
         val = getByte(ind);
-        gen_arg(arg, "$%02X", ind);
-        bit(N, a < val);
-        bit(Z, a == val);
+        gen_arg(arg, "$%02X [%02X]", ind, val);
+        cmp(a, val);
         break;
       case 0xD5:  // CMP zpg,X
         cmd = "CMP";
         ind = nextByte();
         val = getByte(ind + x);
-        gen_arg(arg, "$%02X, X", ind);
-        bit(N, a < val);
-        bit(Z, a == val);
+        gen_arg(arg, "$%02X, X [%02X]", ind, val);
+        cmp(a, val);
         break;
       case 0xE5:  // SBC zpg
         cmd = "SBC";
         ind = nextByte();
         val = getByte(ind);
-        gen_arg(arg, "$%02X", ind);
+        gen_arg(arg, "$%02X [%02X]", ind, val);
         sbc(val);
         break;
       case 0xF5:  // SBC zpg,X
         cmd = "SBC";
         ind = nextByte();
         val = getByte(ind + x);
-        gen_arg(arg, "$%02X, X", ind);
+        gen_arg(arg, "$%02X, X [%02X]", ind, val);
         sbc(val);
         break;
 
@@ -473,7 +485,7 @@ void CPU6502::emulate() {
         bit(C, val & 0x80);
         val <<= 1;
         setByte(ind, val);
-        gen_arg(arg, "$%02X", ind);
+        gen_arg(arg, "$%02X [%02X]", ind, val);
         bit(N, val & 0x80);
         bit(Z, val == 0);
         break;
@@ -484,7 +496,7 @@ void CPU6502::emulate() {
         bit(C, val & 0x80);
         val <<= 1;
         setByte(ind + x, val);
-        gen_arg(arg, "$%02X, X", ind);
+        gen_arg(arg, "$%02X, X [%02X]", ind, val);
         bit(N, val & 0x80);
         bit(Z, val == 0);
         break;
@@ -495,7 +507,7 @@ void CPU6502::emulate() {
         srC = (sr & C) ? 1 : 0;
         bit(C, val & 0x80);
         val = (val << 1) | srC;
-        gen_arg(arg, "$%02X", ind);
+        gen_arg(arg, "$%02X [%02X]", ind, val);
         setByte(ind, val);
         bit(N, val & 0x80);
         bit(Z, val == 0);
@@ -507,7 +519,7 @@ void CPU6502::emulate() {
         srC = (sr & C) ? 1 : 0;
         bit(C, val & 0x80);
         val = (val << 1) | srC;
-        gen_arg(arg, "$%02X, X", ind);
+        gen_arg(arg, "$%02X, X [%02X]", ind, val);
         setByte(ind + x, val);
         bit(N, val & 0x80);
         bit(Z, val == 0);
@@ -519,7 +531,7 @@ void CPU6502::emulate() {
         bit(C, val & 0x01);
         val >>= 1;
         setByte(ind, val);
-        gen_arg(arg, "$%02X", ind);
+        gen_arg(arg, "$%02X [%02X]", ind, val);
         bit(N, val & 0x80);
         bit(Z, val == 0);
         break;
@@ -530,7 +542,7 @@ void CPU6502::emulate() {
         bit(C, val & 0x01);
         val >>= 1;
         setByte(ind + x, val);
-        gen_arg(arg, "$%02X, X", ind);
+        gen_arg(arg, "$%02X, X [%02X]", ind, val);
         bit(N, val & 0x80);
         bit(Z, val == 0);
         break;
@@ -542,7 +554,7 @@ void CPU6502::emulate() {
         bit(C, val & 0x01);
         val = (val >> 1) | srC;
         setByte(ind, val);
-        gen_arg(arg, "$%02X", ind);
+        gen_arg(arg, "$%02X [%02X]", ind, val);
         bit(N, val & 0x80);
         bit(Z, val == 0);
         break;
@@ -554,7 +566,7 @@ void CPU6502::emulate() {
         bit(C, val & 0x01);
         val = (val >> 1) | srC;
         setByte(ind + x, val);
-        gen_arg(arg, "$%02X, X", ind);
+        gen_arg(arg, "$%02X, X [%02X]", ind, val);
         bit(N, val & 0x80);
         bit(Z, val == 0);
         break;
@@ -591,7 +603,8 @@ void CPU6502::emulate() {
         ind = nextByte();
         val = getByte(ind);
         val--;
-        gen_arg(arg, "$%02X", ind);
+        gen_arg(arg, "$%02X [%02X]", ind, val);
+        setByte(ind, val);
         bit(N, val & 0x80);
         bit(Z, val == 0);
         break;
@@ -600,7 +613,8 @@ void CPU6502::emulate() {
         ind = nextByte();
         val = getByte(ind + x);
         val--;
-        gen_arg(arg, "$%02X, X", ind);
+        gen_arg(arg, "$%02X, X [%02X]", ind, val);
+        setByte(ind + x, val);
         bit(N, val & 0x80);
         bit(Z, val == 0);
         break;
@@ -609,7 +623,8 @@ void CPU6502::emulate() {
         ind = nextByte();
         val = getByte(ind);
         val++;
-        gen_arg(arg, "$%02X", ind);
+        gen_arg(arg, "$%02X [%02X]", ind, val);
+        setByte(ind, val);
         bit(N, val & 0x80);
         bit(Z, val == 0);
         break;
@@ -618,7 +633,8 @@ void CPU6502::emulate() {
         ind = nextByte();
         val = getByte(ind + x);
         val++;
-        gen_arg(arg, "$%02X, X", ind);
+        gen_arg(arg, "$%02X, X [%02X]", ind, val);
+        setByte(ind + x, val);
         bit(N, val & 0x80);
         bit(Z, val == 0);
         break;
@@ -721,7 +737,7 @@ void CPU6502::emulate() {
         ind = nextWord();
         val = getByte(ind + y);
         a |= val;
-        gen_arg(arg, "$%04X, Y", ind);
+        gen_arg(arg, "$%04X, Y [%02X]", ind, val);
         bit(N, a & 0x80);
         bit(Z, a == 0);
         break;
@@ -738,7 +754,7 @@ void CPU6502::emulate() {
         ind = nextWord();
         val = getByte(ind + y);
         a &= val;
-        gen_arg(arg, "$%04X, Y", ind);
+        gen_arg(arg, "$%04X, Y [%02X]", ind, val);
         bit(N, a & 0x80);
         bit(Z, a == 0);
         break;
@@ -755,7 +771,7 @@ void CPU6502::emulate() {
         ind = nextWord();
         val = getByte(ind + y);
         a ^= val;
-        gen_arg(arg, "$%02X, Y", ind);
+        gen_arg(arg, "$%02X, Y [%02X]", ind, val);
         bit(N, a & 0x80);
         bit(Z, a == 0);
         break;
@@ -769,15 +785,16 @@ void CPU6502::emulate() {
         cmd = "ADC";
         ind = nextWord();
         val = getByte(ind + y);
-        gen_arg(arg, "$%02X, Y", ind);
+        gen_arg(arg, "$%02X, Y [%02X]", ind, val);
         adc(val);
         break;
       // case 0x89 is illegal
       case 0x99:  // STA abs,Y
         cmd = "STA";
         ind = nextWord();
-        setByte(ind + y, a);
-        gen_arg(arg, "$%02X, Y", ind);
+        ind2 = ind + y;
+        setByte(ind2, a);
+        gen_arg(arg, "$%02X, Y [%04X]", ind, ind2);
         break;
       case 0xA9:  // LDA #
         cmd = "LDA";
@@ -800,16 +817,14 @@ void CPU6502::emulate() {
         cmd = "CMP";
         val = nextByte();
         gen_arg(arg, "#$%02X", val);
-        bit(N, a < val);
-        bit(Z, a == val);
+        cmp(a, val);
         break;
       case 0xD9:  // CMP abs,Y
         cmd = "CMP";
         ind = nextWord();
         val = getByte(ind + y);
-        gen_arg(arg, "$%02X, Y", ind);
-        bit(N, a < val);
-        bit(Z, a == val);
+        gen_arg(arg, "$%02X, Y [%02X]", ind, val);
+        cmp(a, val);
         break;
       case 0xE9:  // SBC #
         cmd = "SBC";
@@ -821,7 +836,7 @@ void CPU6502::emulate() {
         cmd = "SBC";
         ind = nextWord();
         val = getByte(ind + y);
-        gen_arg(arg, "$%02X, y", ind);
+        gen_arg(arg, "$%02X, y [%02X]", ind, val);
         sbc(val);
         break;
 
@@ -908,7 +923,7 @@ void CPU6502::emulate() {
         cmd = "BIT";
         ind = nextWord();
         val = getByte(ind);
-        gen_arg(arg, "$%04X", ind);
+        gen_arg(arg, "$%04X [%02X]", ind, val);
         bit(N, val & N);
         bit(V, val & V);
         bit(Z, (a & val) == 0);
@@ -945,7 +960,7 @@ void CPU6502::emulate() {
 
       case 0xBC:  // LDY abs,X
         cmd = "LDY";
-        ind = nextByte();
+        ind = nextWord();
         y = getByte(ind + x);
         gen_arg(arg, "$%02X, X", ind);
         bit(N, y & 0x80);
@@ -954,20 +969,18 @@ void CPU6502::emulate() {
 
       case 0xCC:  // CPY abs
         cmd = "CPY";
-        ind = nextByte();
+        ind = nextWord();
         val = getByte(ind);
-        gen_arg(arg, "$%02X", ind);
-        bit(N, y < val);
-        bit(Z, y == val);
+        gen_arg(arg, "$%02X [%02X]", ind, val);
+        cmp(y, val);
         break;
 
       case 0xEC:  // CPX abs
         cmd = "CPX";
-        ind = nextByte();
+        ind = nextWord();
         val = getByte(ind);
-        gen_arg(arg, "$%02X", ind);
-        bit(N, x < val);
-        bit(Z, x == val);
+        gen_arg(arg, "$%02X [%02X]", ind, val);
+        cmp(x, val);
         break;
 
         // -D
@@ -977,7 +990,7 @@ void CPU6502::emulate() {
         ind = nextWord();
         val = getByte(ind);
         a |= val;
-        gen_arg(arg, "$%04X", ind);
+        gen_arg(arg, "$%04X [%02X]", ind, val);
         bit(N, a & 0x80);
         bit(Z, a == 0);
         break;
@@ -986,7 +999,7 @@ void CPU6502::emulate() {
         ind = nextWord();
         val = getByte(ind + x);
         a |= val;
-        gen_arg(arg, "$%04X, X", ind);
+        gen_arg(arg, "$%04X, X [%02X]", ind, val);
         bit(N, a & 0x80);
         bit(Z, a == 0);
         break;
@@ -995,7 +1008,7 @@ void CPU6502::emulate() {
         ind = nextWord();
         val = getByte(ind);
         a &= val;
-        gen_arg(arg, "$%04X", ind);
+        gen_arg(arg, "$%04X [%02X]", ind, val);
         bit(N, a & 0x80);
         bit(Z, a == 0);
         break;
@@ -1004,7 +1017,7 @@ void CPU6502::emulate() {
         ind = nextWord();
         val = getByte(ind + x);
         a &= val;
-        gen_arg(arg, "$%04X, X", ind);
+        gen_arg(arg, "$%04X, X [%02X]", ind, val);
         bit(N, a & 0x80);
         bit(Z, a == 0);
         break;
@@ -1013,7 +1026,7 @@ void CPU6502::emulate() {
         ind = nextWord();
         val = getByte(ind);
         a ^= val;
-        gen_arg(arg, "$%04X", ind);
+        gen_arg(arg, "$%04X [%02X]", ind, val);
         bit(N, a & 0x80);
         bit(Z, a == 0);
         break;
@@ -1022,7 +1035,7 @@ void CPU6502::emulate() {
         ind = nextWord();
         val = getByte(ind + x);
         a ^= val;
-        gen_arg(arg, "$%04X, X", ind);
+        gen_arg(arg, "$%04X, X [%02X]", ind, val);
         bit(N, a & 0x80);
         bit(Z, a == 0);
         break;
@@ -1030,14 +1043,14 @@ void CPU6502::emulate() {
         cmd = "ADC";
         ind = nextWord();
         val = getByte(ind);
-        gen_arg(arg, "$%04X", ind);
+        gen_arg(arg, "$%04X [%02X]", ind, val);
         adc(val);
         break;
       case 0x7D:  // ADC abs,X
         cmd = "ADC";
         ind = nextWord();
         val = getByte(ind + x);
-        gen_arg(arg, "$%04X, X", ind);
+        gen_arg(arg, "$%04X, X [%02X]", ind, val);
         adc(val);
         break;
       case 0x8D:  // STA abs
@@ -1049,8 +1062,9 @@ void CPU6502::emulate() {
       case 0x9D:  // STA abs,X
         cmd = "STA";
         ind = nextWord();
-        setByte(ind + x, a);
-        gen_arg(arg, "$%04X, X", ind);
+        ind2 = ind + x;
+        setByte(ind2, a);
+        gen_arg(arg, "$%04X, X [%04X]", ind, ind2);
         break;
       case 0xAD:  // LDA abs
         cmd = "LDA";
@@ -1074,30 +1088,32 @@ void CPU6502::emulate() {
         cmd = "CMP";
         ind = nextWord();
         val = getByte(ind);
-        gen_arg(arg, "$%04X", ind);
-        bit(N, a < val);
-        bit(Z, a == val);
+        gen_arg(arg, "$%04X [%02X]", ind, val);
+        sav = a;
+        sbc(val);
+        a = sav;
         break;
       case 0xDD:  // CMP abs,X
         cmd = "CMP";
         ind = nextWord();
         val = getByte(ind + x);
-        gen_arg(arg, "$%04X, X", ind);
-        bit(N, a < val);
-        bit(Z, a == val);
+        gen_arg(arg, "$%04X, X [%02X]", ind, val);
+        sav = a;
+        sbc(val);
+        a = sav;
         break;
       case 0xED:  // SBC abs
         cmd = "SBC";
         ind = nextWord();
         val = getByte(ind);
-        gen_arg(arg, "$%04X", ind);
+        gen_arg(arg, "$%04X [%02X]", ind, val);
         sbc(val);
         break;
       case 0xFD:  // SBC abs,X
         cmd = "SBC";
         ind = nextWord();
         val = getByte(ind + x);
-        gen_arg(arg, "$%04X, X", ind);
+        gen_arg(arg, "$%04X, X [%02X]", ind, val);
         sbc(val);
         break;
 
@@ -1132,7 +1148,7 @@ void CPU6502::emulate() {
         srC = (sr & C) ? 1 : 0;
         bit(C, val & 0x80);
         val = (val << 1) | srC;
-        gen_arg(arg, "$%04X", ind);
+        gen_arg(arg, "$%04X [%02X]", ind, val);
         setByte(ind, val);
         bit(N, val & 0x80);
         bit(Z, val == 0);
@@ -1144,7 +1160,7 @@ void CPU6502::emulate() {
         srC = (sr & C) ? 1 : 0;
         bit(C, val & 0x80);
         val = (val << 1) | srC;
-        gen_arg(arg, "$%04X, X", ind);
+        gen_arg(arg, "$%04X, X [%02X]", ind, val);
         setByte(ind + x, val);
         bit(N, val & 0x80);
         bit(Z, val == 0);
@@ -1156,7 +1172,7 @@ void CPU6502::emulate() {
         bit(C, val & 0x01);
         val >>= 1;
         setByte(ind, val);
-        gen_arg(arg, "$%04X", ind);
+        gen_arg(arg, "$%04X [%02X]", ind, val);
         bit(N, val & 0x80);
         bit(Z, val == 0);
         break;
@@ -1167,7 +1183,7 @@ void CPU6502::emulate() {
         bit(C, val & 0x01);
         val >>= 1;
         setByte(ind + x, val);
-        gen_arg(arg, "$%04X, X", ind);
+        gen_arg(arg, "$%04X, X [%02X]", ind, val);
         bit(N, val & 0x80);
         bit(Z, val == 0);
         break;
@@ -1179,7 +1195,7 @@ void CPU6502::emulate() {
         bit(C, val & 0x01);
         val = (val >> 1) | srC;
         setByte(ind, val);
-        gen_arg(arg, "$%04X", ind);
+        gen_arg(arg, "$%04X [%02X]", ind, val);
         bit(N, val & 0x80);
         bit(Z, val == 0);
         break;
@@ -1191,7 +1207,7 @@ void CPU6502::emulate() {
         bit(C, val & 0x01);
         val = (val >> 1) | srC;
         setByte(ind + x, val);
-        gen_arg(arg, "$%04X, X", ind);
+        gen_arg(arg, "$%04X, X [%02X]", ind, val);
         bit(N, val & 0x80);
         bit(Z, val == 0);
         break;
@@ -1223,7 +1239,8 @@ void CPU6502::emulate() {
         ind = nextWord();
         val = getByte(ind);
         val--;
-        gen_arg(arg, "$%04X", ind);
+        gen_arg(arg, "$%04X [%02X]", ind, val);
+        setByte(ind, val);
         bit(N, val & 0x80);
         bit(Z, val == 0);
         break;
@@ -1232,7 +1249,8 @@ void CPU6502::emulate() {
         ind = nextWord();
         val = getByte(ind + x);
         val--;
-        gen_arg(arg, "$%04X, X", ind);
+        gen_arg(arg, "$%04X, X [%02X]", ind, val);
+        setByte(ind + x, val);
         bit(N, val & 0x80);
         bit(Z, val == 0);
         break;
@@ -1241,7 +1259,8 @@ void CPU6502::emulate() {
         ind = nextWord();
         val = getByte(ind);
         val++;
-        gen_arg(arg, "$%04X", ind);
+        gen_arg(arg, "$%04X [%02X]", ind, val);
+        setByte(ind, val);
         bit(N, val & 0x80);
         bit(Z, val == 0);
         break;
@@ -1250,7 +1269,8 @@ void CPU6502::emulate() {
         ind = nextWord();
         val = getByte(ind + x);
         val++;
-        gen_arg(arg, "$%04X, X", ind);
+        gen_arg(arg, "$%04X, X [%02X]", ind, val);
+        setByte(ind + x, val);
         bit(N, val & 0x80);
         bit(Z, val == 0);
         break;
@@ -1261,10 +1281,9 @@ void CPU6502::emulate() {
         cmd = "???";
         break;
     }
-    // ESP_LOGD(
-    //     TAG,
-    //     "%04X: %s %-20s [a=%02x x=%02x, y=%02x, sr=%02x, sp=%02x, pc=%04x]",
-    //     spc, cmd, arg, uint8_t(a), x, y, sr, sp, pc);
+    log_inst(
+        "%04X: %s %-20s [a=%02x x=%02x, y=%02x, sr=%02x, sp=%02x, pc=%04x]",
+        spc, cmd, arg, uint8_t(a), x, y, sr, sp, pc);
     counter--;
     if (counter <= 0) {
       running = false;
@@ -1313,10 +1332,15 @@ uint16_t CPU6502::nextWord() {
   return w;
 }
 
-uint8_t CPU6502::getByte(uint16_t address) { return memory->mem[address]; }
+uint8_t CPU6502::getByte(uint16_t address) {
+  return memory->mem[address];
+  }
 
 void CPU6502::setByte(uint16_t address, uint8_t byte) {
-  memory->mem[address] = byte;
+  // only write in RAM
+  if (address < 0xc000) {
+    memory->mem[address] = byte;
+  }
 }
 
 uint16_t CPU6502::getWord(uint16_t address) {
@@ -1325,23 +1349,26 @@ uint16_t CPU6502::getWord(uint16_t address) {
          0xffff;
 }
 
-void CPU6502::pushByte(uint8_t byte) { memory->mem[sp++] = byte; }
+void CPU6502::pushByte(uint8_t byte) {
+  sp--;
+  memory->mem[0x100 + sp] = byte;
+}
 
 uint8_t CPU6502::pullByte() {
-  sp--;
-  uint8_t byte = memory->mem[sp];
+  uint8_t byte = memory->mem[0x100 + sp++];
   return byte;
 }
 
 void CPU6502::pushWord(uint16_t word) {
-  memory->mem[sp++] = uint8_t(word & 0xff);
-  memory->mem[sp++] = uint8_t(word >> 8);
+  sp -= 2;
+  memory->mem[0x100 + sp] = uint8_t(word & 0xff);
+  memory->mem[0x100 + sp+1] = uint8_t(word >> 8);
 }
 
 uint16_t CPU6502::pullWord() {
-  sp -= 2;
   uint16_t word =
-      (uint16_t(memory->mem[sp])) + (uint16_t(memory->mem[sp + 1]) << 8);
+      (uint16_t(memory->mem[0x100+sp])) + (uint16_t(memory->mem[0x100 + sp + 1]) << 8);
+  sp += 2;
   return word & 0xffff;
 }
 
@@ -1350,7 +1377,7 @@ void CPU6502::adc(uint8_t val) {
   uint16_t res;
   res = a + val + carry();
   bit(C, res >= 0x100);
-  res &= 0x7f;
+  res &= 0xff;
   bit(V, (a < 0x80 && val < 0x80 && res >= 0x80) ||
              (a >= 0x80 && val >= 0x80 && res < 0x80));
   a = res;
@@ -1358,12 +1385,28 @@ void CPU6502::adc(uint8_t val) {
   bit(Z, a == 0);
 }
 
+void CPU6502::cmp(uint8_t reg, uint8_t val) {
+  if (reg < val) {
+    bit(N, (int(reg) - int(val)) & 0x80);
+    bit(C, false);
+    bit(Z, false);
+  } else if (reg > val) {
+    bit(N, (int(reg) - int(val)) & 0x80);
+    bit(C, true);
+    bit(Z, false);
+  } else {
+    bit(N, false);
+    bit(C, true);
+    bit(Z, true);
+  }
+}
+
 void CPU6502::sbc(uint8_t val) {
   // TODO: BCD subtraction
   uint16_t res;
   res = a - val - carry();
   bit(C, res >= 0x100);
-  res &= 0x7f;
+  res &= 0xff;
   bit(V, (a < 0x80 && val < 0x80 && res >= 0x80) ||
              (a >= 0x80 && val >= 0x80 && res < 0x80));
   a = res;

@@ -31,6 +31,7 @@ public:
  uint8_t carry();
  void adc(uint8_t val);
  void sbc(uint8_t val);
+ void cmp(uint8_t reg, uint8_t val);
 
 private:
  uint8_t a = 0;
